@@ -6,13 +6,18 @@
 
 #### lab/lab01
 
-cd lab01
-go mod init lab01
-cd main
-go build mrmaster.go
-go build mrworker.go
+	cd lab01
+	go mod init lab01
+	cd main
+	go build mrmaster.go
+	go build mrworker.go
 
-sh test.sh
+	sh test.sh
 
 * lab01中遇到一个问题没解决--》“unexpected EOF”，目前还不知道是啥原因
+
+#### lab/lab02A
+
+	cd lab02A
+	go test -run 2A
 	
