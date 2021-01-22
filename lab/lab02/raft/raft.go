@@ -32,8 +32,6 @@ import "lab02/labrpc"
 // import "bytes"
 // import "../labgob"
 
-
-
 //
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
@@ -53,6 +51,13 @@ type ApplyMsg struct {
 	CommandIndex int
 }
 
+// Define a struct to hold information about each log entry
+type Entry struct {
+	Term   int
+	Index  int
+	Command  string
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -70,18 +75,24 @@ type Raft struct {
 	// Updated on stable storage before responding to RPCs 在响应RPC前更新持久化的存储
 	//
 	// Persistent State
-	currentTerm int
-	voteFor     int
-	log         []string
+	currentTerm          int
+	voteFor              int
+	log                  []Entry
 
 	// Volatile State
-	commitIndex int
-	lastApplied int
+	commitIndex          int
+	lastApplied          int
 
 	// Volatile State on leaders
-	nextIndex   []int
-	matchIndex  []int
+	nextIndex            []int
+	matchIndex           []int
 
+	// added by me
+	state                string
+	applyCh              chan ApplyMsg
+	voteCountCh          chan bool
+	electionTimer        *RaftTimer
+	appendEntriesTimer   []*RaftTimer
 }
 
 // return currentTerm and whether this server
@@ -91,7 +102,13 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
-	
+	term = rf.currentTerm
+	if rf.state == "leader" {
+		isleader = true
+	} else {
+		isleader = false
+	}
+
 	return term, isleader
 }
 
@@ -143,10 +160,10 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	term         int
-	candidatedId int
-	lastLogIndex int
-	lastLogTerm  int
+	Term         int
+	CandidatedId int
+	LastLogIndex int
+	LastLogTerm  int
 }
 
 //
@@ -155,25 +172,62 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	term        int
-	voteGranted bool
+	Term        int
+	VoteGranted bool
 }
 
 //
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
+	rf.mu.Lock()
 	// Your code here (2A, 2B).
-	if args.term < rf.currentTerm {
-		reply.voteGranted = false
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+	lastLogIndex := len(rf.log)-1
+	lastLogTerm := rf.log[lastLogIndex].Term
+	if args.Term < rf.currentTerm {
+		rf.mu.Unlock()
 		return
-	}
-
-	if (rf.voteFor == args.candidatedId) || (rf.voteFor == 0) { //golang中int类型默认值是0，所以peer[]要从1开始
-		if args.lastLogTerm == rf.currentTerm {
-			reply.voteGranted = true
+	}else if args.Term == rf.currentTerm {
+		if rf.state == "leader" {
+			rf.mu.Unlock()
+			return
+		}
+		if rf.voteFor == args.CandidatedId {
+			reply.VoteGranted = true
+			rf.mu.Unlock()
+			return
+		}else if rf.voteFor != -1 {
+			rf.mu.Unlock()
+			return
 		}
 	}
+
+	// Rules for Servers
+	// All Servers
+	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.voteFor = -1
+		//DPrintf("%d is transfor to follower", rf.me)
+		rf.mu.Unlock()
+		rf.changeState("follower")
+		rf.mu.Lock()
+	}
+	if lastLogTerm > args.LastLogTerm {
+		rf.mu.Unlock()
+		return
+	}else if lastLogTerm == args.LastLogTerm && args.LastLogIndex < lastLogIndex {
+		rf.mu.Unlock()
+		return
+	}
+	rf.currentTerm = args.Term
+	rf.voteFor = args.CandidatedId
+	reply.VoteGranted = true
+	rf.mu.Unlock()
+	rf.changeState("follower")
+	return
 }
 
 //
@@ -269,70 +323,286 @@ func (rf *Raft) killed() bool {
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
 //
-func Make(peers []*labrpc.ClientEnd, me int,
-	persister *Persister, applyCh chan ApplyMsg) *Raft {
+func Make(peers []*labrpc.ClientEnd, me int, persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{} //一个raft实例
 	rf.peers = peers //一个raft实例包含的所有servers
 	rf.persister = persister //存放这台机器的持久状态persistent state
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.GetState()
+	rf.currentTerm = 0 //initialized to 0 on first boot
+	rf.state = "follower"
+	rf.voteFor = -1 // null if none
+	rf.log = make([]Entry, 1)
+	rf.commitIndex = 0 //initialized to 0
+	rf.lastApplied = 0 //initialized to 0
+	rf.electionTimer = &RaftTimer{}
+	rf.electionTimer.setTimer(ElectionTimer)
+	rf.appendEntriesTimer = make([]*RaftTimer, len(rf.peers))
+	for peer := range(rf.peers) {
+		rf.appendEntriesTimer[peer] = &RaftTimer{}
+		rf.appendEntriesTimer[peer].setTimer(AppendEntriesTimer)
+	}
+	rf.applyCh = applyCh
 
+	//DPrintf("%d is %s", rf.me, rf.state)
 
+	// 选举定时器
+	go func() {
+		//DPrintf("选举定时器")
+		for {
+			if rf.state != "leader" {
+				<-rf.electionTimer.timer.C // 定时器
+				//DPrintf("%d is %s, and change to candidate", rf.me, rf.state)
+				//if rf.state == "follower" {
+				rf.changeState("candidate")
+				//}
+				//rf.mu.Unlock()
+			} else {
+				rf.electionTimer.timer.Stop()
+			}
+		}
+	}()
 
-
-
+	// 发送appendEntries定时器
+	for peer := range(rf.peers) {
+		if peer == rf.me {
+			continue
+		}
+		go func(peer int) {
+			for {
+				<-rf.appendEntriesTimer[peer].timer.C
+				if rf.state == "leader" {
+					rf.appendEntries2Peer(peer)
+				}
+			}
+		}(peer)
+	}
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-
 	return rf
 }
 
-type AppendEntriesArgs struct {
-	term         int
-	leaderId     int
-	prevLogIndex int
-	prevLogTerm  int
-	entries      []string
-	leaderCommit int
-}
-
-type AppendEntriesReply struct {
-	term    int
-	success bool
-}
-
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	if args.term < rf.currentTerm {
-		reply.success = false
+func (rf *Raft) appendEntries2Peer(peer int) {
+	rf.mu.Lock()
+	DPrintf("%d send append entries to %d", rf.me, peer)
+	lastLogIndex := len(rf.log) - 1
+	prevLogIndex := rf.nextIndex[peer] - 1
+	if rf.nextIndex[peer] > lastLogIndex {
+		// 没有需要发送的log
+		prevLogIndex = lastLogIndex
 	}
-	if args.prevLogTerm == rf.currentTerm {
-		if rf.log[args.prevLogIndex] == "" {
-			reply.success = false
+	prevLogTerm := rf.log[prevLogIndex].Term
+	logs := append([]Entry{}, rf.log[rf.nextIndex[peer]:]...)
+
+	appendEntriesArgs:= AppendEntriesArgs{
+		Term          : rf.currentTerm,
+		LeaderId      : rf.me,
+		PrevLogIndex  : prevLogIndex,
+		PrevLogTerm   : prevLogTerm,
+		Entries       : logs,
+		LeaderCommit  : rf.commitIndex,
+	}
+
+	appendEntriesReply := AppendEntriesReply{}
+	rf.mu.Unlock()
+	rf.sendAppendEntries(peer, &appendEntriesArgs, &appendEntriesReply)
+	// Rules for Servers
+	// All Servers
+	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
+	rf.mu.Lock()
+	if appendEntriesReply.Term > rf.currentTerm {
+		rf.currentTerm = appendEntriesReply.Term
+		rf.changeState("follower")
+	}
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) changeState(state string) {
+	rf.mu.Lock()
+	//DPrintf("%d is %s ,and changeState to %s", rf.me, rf.state, state)
+	if state == "candidate" && rf.state == "follower"{
+		rf.state = state
+		rf.voteFor = rf.me
+		rf.electionTimer.setTimer(ElectionTimer)// 转换成自身周期定时器
+		for peer := range(rf.peers) {
+			rf.appendEntriesTimer[peer].timer.Stop()
+		}
+		rf.mu.Unlock()
+		rf.startElection()
+		return
+	}
+	rf.state = state
+	if rf.state == "leader" {
+		rf.electionTimer.timer.Stop()
+		for peer := range(rf.peers) {
+			rf.appendEntriesTimer[peer].setTimer(AppendEntriesTimer)
+			rf.appendEntriesTimer[peer].resetTimer()
+		}
+		rf.nextIndex = make([]int, len(rf.peers))
+		rf.matchIndex = make([]int, len(rf.peers))
+		lastLogIndex := len(rf.log) - 1 // initialized to leader last log index  (leader last log index = lastSnapshotIndex + len(rf.log) - 1) 这里先不考虑快照，假设只有log
+		for i := 0; i < len(rf.peers); i++ {
+			rf.nextIndex[i] = lastLogIndex + 1
+			rf.matchIndex[i] = 0 // initialized to 0
 		}
 	}
-	for i := 0; i < len(args.entries); i++ {
-		if args.entries[args.prevLogIndex + i]['term'] != rf.log[args.prevLogIndex + i]['term'] {
-			rf.log[args.preLogIndex+i:] = []
+	if rf.state == "follower" {
+		rf.voteFor = -1
+		rf.electionTimer.setTimer(ElectionTimer)
+		rf.electionTimer.resetTimer()
+	}
+	rf.mu.Unlock()
+}
+
+func (rf *Raft) startElection() {
+	rf.mu.Lock()
+	//DPrintf("%d is %s, and start election", rf.me, rf.state)
+	if rf.state != "candidate" {
+		rf.mu.Unlock()
+		return
+	}
+	// 0.Initailize voteCountCh
+	rf.voteCountCh = make(chan bool, len(rf.peers)) //有缓存的通道
+	// 1.Increment current Term
+	rf.currentTerm += 1
+	// 2.Vote for self
+	rf.voteFor = rf.me
+	// 3.Reset election timer
+	rf.electionTimer.resetTimer()
+	// 4.Sent Request Vote RPCs to all other servers
+	lastLogIndex := len(rf.log) - 1
+	lastLogTerm := rf.log[len(rf.log) - 1].Term
+	requestVoteArgs := RequestVoteArgs{
+		Term          : rf.currentTerm,
+		CandidatedId  : rf.me,
+		LastLogIndex  : lastLogIndex,
+		LastLogTerm   : lastLogTerm,
+	}
+
+	chPeerCount := 1
+	grantedCount := 1
+	rf.mu.Unlock()
+
+	for peer := range(rf.peers) {
+		// If votes received from majority of servers:become leader
+		if peer == rf.me {
+			continue
+		}
+		//DPrintf("%d request vote from %d", rf.me, peer)
+		go func(ch chan bool, peer int) {
+			requestVoteReply := RequestVoteReply{}
+			rf.sendRequestVote(peer, &requestVoteArgs, &requestVoteReply)
+			ch <- requestVoteReply.VoteGranted
+			// Rules for Servers
+			// All Servers
+			// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
+			rf.mu.Lock()
+			if requestVoteReply.Term > rf.currentTerm {
+				rf.currentTerm = requestVoteReply.Term
+				//DPrintf("%s will change to follower", rf.state)
+				rf.changeState("follower")
+			}
+			rf.mu.Unlock()
+		}(rf.voteCountCh, peer)
+	}
+
+	//rf.mu.Lock()
+	for {
+		//DPrintf("===========================================chPeerCount is %d", chPeerCount)
+		r := <-rf.voteCountCh
+		chPeerCount += 1
+		//DPrintf("===========================================chPeerCount is %d, voteCount is %v", chPeerCount, r)
+		if r == true {
+			grantedCount += 1
+			//DPrintf("===========================================%d received %d vote", rf.me, grantedCount)
+		}
+		if chPeerCount == len(rf.peers) || grantedCount > len(rf.peers)/2 || chPeerCount-grantedCount > len(rf.peers)/2 {
 			break
 		}
 	}
 
-	for i := 0; i < len(args.entries); i++ {
-		if args.prevLogIndex + i > len(rf.log) {
-			rf.log[args.prevLogIndex + i] = args.entries[args.prevLogIndex + i]
-		}
+	if grantedCount <= len(rf.peers)/2 {
+		return
 	}
 
-	if args.leaderCommit > rf.commitIndex {
-		if args.leaderCommit < args.prevLogIndex + len(args.entries) {
-			rf.commitIndex = args.leaderCommit
-		}else{
-			rf.commitIndex = args.prevLogIndex + len(args.entries)
+	if rf.currentTerm == requestVoteArgs.Term && rf.state == "candidate" {
+		//rf.mu.Lock()
+		rf.changeState("leader")
+		return
+	}
+	//rf.mu.Unlock()
+	return
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+type AppendEntriesArgs struct {
+	Term         int
+	LeaderId     int
+	PrevLogIndex int
+	PrevLogTerm  int
+	Entries      []Entry
+	LeaderCommit int
+}
+
+type AppendEntriesReply struct {
+	Term    int
+	Success bool
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	DPrintf("%d received %d append entries", rf.me, args.LeaderId)
+	// 1. Reply false if term < currentTerm
+	if args.Term < rf.currentTerm {
+		reply.Success = false
+	}
+	// Rules for Servers
+	// All Servers
+	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
+		rf.changeState("follower")
+	}
+
+	if args.PrevLogTerm == rf.currentTerm {
+		// Rules for Servers
+		// If AppendEntries RPC received from new leader: convert to follower
+		rf.changeState("follower")
+		if len(args.Entries) == 0 {
+			reply.Term = rf.currentTerm
+			reply.Success = true
+		}
+		if rf.log[args.PrevLogIndex].Command == "" {
+			reply.Success = false
 		}
 	}
+	//for i := 0; i < len(args.entries); i++ {
+	//	if args.entries[args.prevLogIndex + i]['term'] != rf.log[args.prevLogIndex + i]['term'] {
+	//		rf.log[args.preLogIndex+i:] = []
+	//		break
+	//	}
+	//}
+	//
+	//for i := 0; i < len(args.entries); i++ {
+	//	if args.prevLogIndex + i > len(rf.log) {
+	//		rf.log[args.prevLogIndex + i] = args.entries[args.prevLogIndex + i]
+	//	}
+	//}
+	//
+	//if args.leaderCommit > rf.commitIndex {
+	//	if args.leaderCommit < args.prevLogIndex + len(args.entries) {
+	//		rf.commitIndex = args.leaderCommit
+	//	}else{
+	//		rf.commitIndex = args.prevLogIndex + len(args.entries)
+	//	}
+	//}
 
 }
