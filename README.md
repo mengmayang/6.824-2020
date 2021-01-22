@@ -16,7 +16,7 @@
 
 * lab01中遇到一个问题没解决--》“unexpected EOF”，目前还不知道是啥原因
 
-#### lab/lab02A
+#### lab/lab02_A
 
 	cd lab02A
 	go test -run 2A
