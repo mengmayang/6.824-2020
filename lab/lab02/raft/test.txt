@@ -1,0 +1,13 @@
+package main
+
+import "time"
+import "fmt"
+
+func main() {
+	t1 := time.Now().UTC()
+	//time.Sleep(600 * time.Millisecond)
+	time.Sleep(1 * time.Second)
+	t2 := time.Now().UTC()
+	duration := t2.Sub(t1).Nanoseconds()/1e6
+	fmt.Printf("duration is %v", duration)
+}

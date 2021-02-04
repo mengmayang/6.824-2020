@@ -302,18 +302,23 @@ func (cfg *config) setlongreordering(longrel bool) {
 // check that there's exactly one leader.
 // try a few times in case re-elections are needed.
 func (cfg *config) checkOneLeader() int {
-	for iters := 0; iters < 10; iters++ {
+	for iters := 0; iters < 30; iters++ {
 		ms := 450 + (rand.Int63() % 100)
 		time.Sleep(time.Duration(ms) * time.Millisecond)
 
 		leaders := make(map[int][]int)
+
 		for i := 0; i < cfg.n; i++ {
 			if cfg.connected[i] {
-				if term, leader := cfg.rafts[i].GetState(); leader {
+				term, leader := cfg.rafts[i].GetState()
+				//DPrintf("%d is connected! cgf[%d]: term: %d, leader: %v", i, i, term, leader)
+				//if term, leader := cfg.rafts[i].GetState(); leader {
+				if leader {
 					leaders[term] = append(leaders[term], i)
 				}
 			}
 		}
+		//DPrintf("leaders are %v" , leaders)
 
 		lastTermWithLeader := -1
 		for term, leaders := range leaders {
@@ -383,6 +388,7 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cmd = cmd1
 		}
 	}
+	DPrintf("cfg.logs: %v", cfg.logs)
 	return count, cmd
 }
 
@@ -458,6 +464,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
+				DPrintf("nd is %d, cmd1 is %v", nd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {

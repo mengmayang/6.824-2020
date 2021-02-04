@@ -6,39 +6,29 @@ import (
 )
 
 const (
-	ElectionTimeout       = time.Millisecond * 2000
-	HeartBeatInterval     = time.Millisecond * 150
-	AppendEntriesInterval = time.Millisecond * 100
-	ApplyLogInterval      = time.Millisecond * 100
-	ElectionTimer         = 1
-	HeartBeatTimer        = 2
-	AppendEntriesTimer    = 3
+	ElectionTimeout  = time.Millisecond * 300
+	HeartBeatTimeout = time.Millisecond * 150
+	ApplyLogInterval = time.Millisecond * 100
+	//MaxLockTime    = time.Millisecond * 10 // debug
+	MaxLockTime      = 10 // debug
 )
 
-type RaftTimer struct{
-	timerType  int
-	timer      *time.Timer
-	interval   time.Duration
+func (rf *Raft) resetElectionTimer() {
+	rf.electionTimer.Stop()
+	r := time.Duration(rand.Int63()) % ElectionTimeout
+	rf.electionTimer.Reset(ElectionTimeout + r)
 }
 
-func (rt *RaftTimer) setTimer(timerType int) {
-	rt.timerType = timerType
-	if rt.timerType == ElectionTimer {
-		rt.interval = ElectionTimeout
-	}else if rt.timerType == HeartBeatTimer {
-		rt.timerType = HeartBeatTimer
-		rt.interval = HeartBeatInterval
-	}else if rt.timerType == AppendEntriesTimer {
-		rt.timerType = AppendEntriesTimer
-		rt.interval = AppendEntriesInterval
+func (rf *Raft) resetHeartBeatTimers() {
+	for peer := range rf.peers {
+		rf.appendEntriesTimers[peer].Stop()
+		rf.appendEntriesTimers[peer].Reset(0)
 	}
-	r := time.Duration(rand.Int63()) % rt.interval
-	rt.timer = time.NewTimer(rt.interval + r) // golang 定时器，定期向自身的C字段发送当时的时间
 }
 
-func (rt *RaftTimer) resetTimer() {
-	rt.timer.Stop()
-	r := time.Duration(rand.Int63()) % rt.interval
-	//DPrintf("%v", rt.interval + r)
-	rt.timer.Reset(rt.interval + r)
+func (rf *Raft) resetHeartBeatTimer(peer int) {
+	rf.appendEntriesTimers[peer].Stop()
+	rf.appendEntriesTimers[peer].Reset(HeartBeatTimeout)
 }
+
+

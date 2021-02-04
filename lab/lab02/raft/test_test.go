@@ -20,6 +20,7 @@ import "sync"
 const RaftElectionTimeout = 1000 * time.Millisecond
 
 func TestInitialElection2A(t *testing.T) {
+	Debug = 0
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -58,9 +59,9 @@ func TestReElection2A(t *testing.T) {
 	cfg.begin("Test (2A): election after network failure")
 
 	leader1 := cfg.checkOneLeader()
-
 	// if the leader disconnects, a new one should be elected.
 	cfg.disconnect(leader1)
+	//DPrintf("if the leader disconnects, a new one should be elected. %d is disconnected.", leader1)
 	cfg.checkOneLeader()
 
 	// if the old leader rejoins, that shouldn't
@@ -70,16 +71,20 @@ func TestReElection2A(t *testing.T) {
 
 	// if there's no quorum, no leader should
 	// be elected.
+	//DPrintf("no leader should be elected")
 	cfg.disconnect(leader2)
 	cfg.disconnect((leader2 + 1) % servers)
 	time.Sleep(2 * RaftElectionTimeout)
 	cfg.checkNoLeader()
 
 	// if a quorum arises, it should elect a leader.
+	//DPrintf("if a quorum arises, it should elect a leader")
 	cfg.connect((leader2 + 1) % servers)
+	//DPrintf("%d is disconnected!", leader2)
 	cfg.checkOneLeader()
 
 	// re-join of last node shouldn't prevent leader from existing.
+	//DPrintf("re-join of last node shouldn't prevent leader from existing.")
 	cfg.connect(leader2)
 	cfg.checkOneLeader()
 
@@ -87,6 +92,7 @@ func TestReElection2A(t *testing.T) {
 }
 
 func TestBasicAgree2B(t *testing.T) {
+	Debug = 1
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
