@@ -388,7 +388,6 @@ func (cfg *config) nCommitted(index int) (int, interface{}) {
 			cmd = cmd1
 		}
 	}
-	DPrintf("cfg.logs: %v", cfg.logs)
 	return count, cmd
 }
 
@@ -464,7 +463,6 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			t1 := time.Now()
 			for time.Since(t1).Seconds() < 2 {
 				nd, cmd1 := cfg.nCommitted(index)
-				DPrintf("nd is %d, cmd1 is %v", nd, cmd1)
 				if nd > 0 && nd >= expectedServers {
 					// committed
 					if cmd1 == cmd {

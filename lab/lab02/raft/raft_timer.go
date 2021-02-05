@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	ElectionTimeout  = time.Millisecond * 300
-	HeartBeatTimeout = time.Millisecond * 150
-	ApplyLogInterval = time.Millisecond * 100
+	ElectionTimeout  = time.Millisecond * 400
+	HeartBeatTimeout = time.Millisecond * 250
+	ApplyLogTimeout  = time.Millisecond * 100
 	//MaxLockTime    = time.Millisecond * 10 // debug
 	MaxLockTime      = 10 // debug
 )
