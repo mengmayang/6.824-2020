@@ -632,7 +632,7 @@ func (rf *Raft) appendEntries2Peer(peer int) {
 	// All Servers
 	// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
 	rf.lock("appendEntries2Peer4")
-	DPrintf("appendEntriesReply.Term is: %d, rf.currentTerm is :%d", appendEntriesReply.Term, rf.currentTerm)
+	//DPrintf("appendEntriesReply.Term is: %d, rf.currentTerm is :%d", appendEntriesReply.Term, rf.currentTerm)
 
 	//TO DO
 	//只有log包含最新term的peer才有资格被选为leader？
@@ -692,7 +692,7 @@ func (rf *Raft) appendEntries2Peer(peer int) {
 				if rf.commitIndex != i {
 					break
 				}
-				DPrintf("peer: %d, appendEntriesReply.Success: %v, hasCommit: %v, count : %d, i: %d", peer, appendEntriesReply.Success, hasCommit, count, i)
+				//DPrintf("peer: %d, appendEntriesReply.Success: %v, hasCommit: %v, count : %d, i: %d", peer, appendEntriesReply.Success, hasCommit, count, i)
 			}
 
 			if hasCommit {
@@ -726,12 +726,10 @@ type AppendEntriesReply struct {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.lock("AppendEntries")
 	rf.resetElectionTimer()
-	//DPrintf("%d received %d append entries, args.appendEntriesArgs:%v", rf.me, args.LeaderId, args.Entries)
+	DPrintf("== %d received %d append entries, args.appendEntriesArgs:%v, args.PrevLogIndex:%v, rf.log:%v", rf.me, args.LeaderId, args.Entries, args.PrevLogIndex, rf.log)
 
 	// currentTerm, for leader to update itself
 	reply.Term = rf.currentTerm
-	//DPrintf("%d received appendEntries from %d, %d term is %d, leader term is %d", rf.me, args.LeaderId, rf.me, rf.currentTerm, args.Term)
-	//rf.electionTimer.resetTimer()
 
 	// 5.1. Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -747,23 +745,29 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.changeState("follower")
 	rf.lock("AppendEntries")
 
-	//if rf.log[0].Command == nil && len(rf.log) == 1{
-	//	rf.log = args.Entries
-	//}
-
 	// 5.3 Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
-	flag := 0
-	for i := args.PrevLogIndex; i < len(rf.log); i++ {
-		for j := 0; j < len(args.Entries); j++ {
-			if args.Entries[j].Term == rf.log[i].Term {
-				if i == j {
-					flag = 1
-				}
-			}
-		}
-	}
-	if flag != 1 {
+	// 如果rf.log在prevLogIndex的位置没有Term和preLogTerm一样的entry
+	lastLogIndex := rf.log[len(rf.log)-1].Index
+	if args.PrevLogIndex > lastLogIndex { // follower没有跟上
 		reply.Success = false
+		reply.NextIndex = lastLogIndex + 1 // 返回给leader以供leader更新preLogIndex
+		rf.unlock("AppendEntries")
+		return
+	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		// leader需要回溯到一个位置，这个位置是args.PrevLogIndex之前，term最新的，rf.commitIndex之后的第一个（有可能就是commitIndex的位置）
+		reply.Success = false
+		// 8 8 9 11 12
+		// 8 8 9 10
+		term := rf.log[args.PrevLogIndex].Term //10
+		index := args.PrevLogIndex //3
+
+		for index > rf.commitIndex && rf.log[index].Term == term { // 3 > 0 && 10 == 10
+			index -= 1
+		}
+		// index = 2
+		reply.NextIndex = index + 1
+		rf.unlock("AppendEntries")
+		return
 	}
 
 	// 5.3 If an existing entry conflicts with a new one(same index but different terms), delete the existing entry and all that follow it
@@ -772,7 +776,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	cycle:
 	for i := args.PrevLogIndex; i < len(rf.log); i++ {
 		for j := 0; j < len(args.Entries); j++ {
-			if rf.log[i].Term == args.Entries[j].Term && rf.log[i].Index == args.Entries[j].Index && rf.log[i].Command != args.Entries[j].Command {
+			if rf.log[i].Term != args.Entries[j].Term && rf.log[i].Index == args.Entries[j].Index {
 				conflict = i
 				break cycle
 			}
@@ -780,9 +784,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if conflict > -1 {
-		for i := conflict; i < len(rf.log); i++ {
-			rf.log[i] = Entry{}
-		}
+		//for i := conflict; i < len(rf.log); i++ {
+		//	rf.log[i] = Entry{}
+		//}
+		rf.log = rf.log[0:conflict]
 	}
 
 	// Append any new entries not already in the log
@@ -790,27 +795,32 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for i := 0; i < len(args.Entries); i++ {
 		for j := args.PrevLogIndex; j < len(rf.log); j++ {
 			if rf.log[j].Term == args.Entries[i].Term && rf.log[j].Index == args.Entries[i].Index && rf.log[j].Command == args.Entries[i].Command {
+				//DPrintf("rf.log[%d]: %v, args.Entries[%d]: %v", i, rf.log[i], j, args.Entries[j])
 				match = i
 			}
 		}
 	}
 
-	var appendLogStart int
-	var entry Entry
+	DPrintf("conflict:%d, match:%d", conflict, match)
 
-	if match != -1 {
-		appendLogStart = match + 1
-	}else {
-		appendLogStart = 0
+	//var appendLogStart int
+	//var entry Entry
+
+	if match == -1 {
+		rf.log = append(rf.log, args.Entries[0:]...)
 	}
-	for i := appendLogStart; i < len(args.Entries); i++ {
-		entry = Entry{
-			Term   : args.Term,
-			Index  : args.Entries[i].Index,
-			Command: args.Entries[i].Command,
-		}
-		rf.log = append(rf.log, entry)
-	}
+
+	//for i := 0; i < len(args.Entries); i++ {
+	//	entry = Entry{
+	//		Term   : args.Term,
+	//		Index  : args.Entries[i].Index,
+	//		Command: args.Entries[i].Command,
+	//	}
+	//	if appendLogStart >= len(rf.log){
+	//		rf.log = append(rf.log, entry)
+	//	}
+	//}
+
 	//DPrintf("%d's log is %v, rf.commitIndex is :%d, rf.lastApplied is : %d, args.LeaderCommit is: %v", rf.me, rf.log, rf.commitIndex, rf.lastApplied, args.LeaderCommit)
 
 	// If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
@@ -823,10 +833,21 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	//DPrintf("rf.commitIndex is :%d", rf.commitIndex)
 
-	rf.applySignal <- true
 	reply.Success = true
-	reply.NextIndex = rf.log[len(rf.log)-1].Index + 1
+	if len(args.Entries) > 0 {
+		if match == -1 {
+			reply.NextIndex = rf.log[len(rf.log)-1].Index + 1
+		}else {
+			reply.NextIndex = rf.log[match].Index + 1
+		}
+	} else {
+		reply.NextIndex = 0
+	}
 
+	rf.applySignal <- true
+
+	DPrintf("## %d received %d append entries, args.appendEntriesArgs:%v, args.PrevLogIndex:%v, rf.log:%v,reply.NextIndex: %d", rf.me, args.LeaderId, args.Entries, args.PrevLogIndex, rf.log, reply.NextIndex)
+	//DPrintf("%s %d's log is %v", rf.state, rf.me, rf.log)
 	rf.unlock("AppendEntries")
 }
 

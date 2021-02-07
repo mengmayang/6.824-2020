@@ -20,7 +20,7 @@ import "sync"
 const RaftElectionTimeout = 1000 * time.Millisecond
 
 func TestInitialElection2A(t *testing.T) {
-	Debug = 0
+	//Debug = 0
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -92,7 +92,7 @@ func TestReElection2A(t *testing.T) {
 }
 
 func TestBasicAgree2B(t *testing.T) {
-	Debug = 1
+	//Debug = 1
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -120,7 +120,7 @@ func TestBasicAgree2B(t *testing.T) {
 // each command is sent to each peer just once.
 //
 func TestRPCBytes2B(t *testing.T) {
-	Debug = 1
+	//Debug = 1
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -152,7 +152,7 @@ func TestRPCBytes2B(t *testing.T) {
 }
 
 func TestFailAgree2B(t *testing.T) {
-	Debug = 1
+	//Debug = 1
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -188,7 +188,7 @@ func TestFailAgree2B(t *testing.T) {
 }
 
 func TestFailNoAgree2B(t *testing.T) {
-	Debug = 1
+	//Debug = 1
 	servers := 5
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -196,11 +196,9 @@ func TestFailNoAgree2B(t *testing.T) {
 	cfg.begin("Test (2B): no agreement if too many followers disconnect")
 
 	cfg.one(10, servers, false)
-	DPrintf("====================================================================!")
 
 	// 3 of 5 followers disconnect
 	leader := cfg.checkOneLeader()
-	DPrintf("===leader is %d", leader)
 	cfg.disconnect((leader + 1) % servers)
 	cfg.disconnect((leader + 2) % servers)
 	cfg.disconnect((leader + 3) % servers)
@@ -229,9 +227,7 @@ func TestFailNoAgree2B(t *testing.T) {
 
 	// the disconnected majority may have chosen a leader from
 	// among their own ranks, forgetting index 2.
-	DPrintf("====================================================================")
 	leader2 := cfg.checkOneLeader()
-	DPrintf("leader2 is %d", leader2)
 	index2, _, ok2 := cfg.rafts[leader2].Start(30)
 	if ok2 == false {
 		t.Fatalf("leader2 rejected Start()")
@@ -347,6 +343,7 @@ loop:
 }
 
 func TestRejoin2B(t *testing.T) {
+	//Debug = 1
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
@@ -385,6 +382,7 @@ func TestRejoin2B(t *testing.T) {
 }
 
 func TestBackup2B(t *testing.T) {
+	//Debug = 1
 	servers := 5
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
