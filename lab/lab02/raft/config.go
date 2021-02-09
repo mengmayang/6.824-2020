@@ -449,13 +449,16 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 			}
 			cfg.mu.Unlock()
 			if rf != nil {
+				//DPrintf("@@1 rf.me is %v, rf.log is : %v, cmd is %v", rf.me, rf.log, cmd)
 				index1, _, ok := rf.Start(cmd)
+				//DPrintf("@@2 index1 is %d, ok is %v", index1, ok)
 				if ok {
 					index = index1
 					break
 				}
 			}
 		}
+		//DPrintf("index is : %d", index)
 
 		if index != -1 {
 			// somebody claimed to be the leader and to have
